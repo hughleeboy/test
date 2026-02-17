@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FlowType Trainer</title>
+    <style>
+      :root {
+        --bg: #0e1116;
+        --text: #f5f7ff;
+        --muted: #656d80;
+        --accent: #8bc4ff;
+        --typed: #6e7483;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        overflow: hidden;
+        background: radial-gradient(circle at 50% 40%, #151a22, #0b0e13 65%);
+        color: var(--text);
+        font-family: "Inter", "SF Pro Text", "Segoe UI", sans-serif;
+      }
+
+      .hud {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        display: flex;
+        justify-content: center;
+        padding: 20px;
+        z-index: 10;
+        pointer-events: none;
+      }
+
+      .wpm {
+        background: rgba(10, 13, 20, 0.6);
+        border: 1px solid rgba(139, 196, 255, 0.2);
+        border-radius: 999px;
+        padding: 10px 22px;
+        font-size: clamp(1rem, 2vw, 1.4rem);
+        letter-spacing: 0.04em;
+        backdrop-filter: blur(6px);
+      }
+
+      .center-guide {
+        position: fixed;
+        top: 20%;
+        bottom: 15%;
+        left: 50%;
+        width: 2px;
+        transform: translateX(-1px);
+        background: linear-gradient(180deg, transparent, rgba(139, 196, 255, 0.45), transparent);
+        opacity: 0.8;
+        pointer-events: none;
+      }
+
+      .track {
+        position: relative;
+        width: 100vw;
+        height: 100vh;
+      }
+
+      .letter {
+        position: absolute;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        font-size: clamp(3.2rem, 9vw, 8rem);
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        color: var(--text);
+        opacity: 0.95;
+        transition: color 180ms linear;
+        will-change: transform, filter, color, opacity;
+        text-shadow: 0 0 24px rgba(139, 196, 255, 0.08);
+      }
+
+      .letter.active {
+        color: var(--accent);
+        text-shadow: 0 0 30px rgba(139, 196, 255, 0.35);
+      }
+
+      .letter.typed {
+        color: var(--typed);
+        opacity: 0.8;
+        text-shadow: none;
+      }
+
+      .letter.flash {
+        animation: typedFlash 360ms ease-out;
+      }
+
+      @keyframes typedFlash {
+        0% {
+          filter: brightness(1);
+          transform: translate(-50%, -50%) scale(1);
+        }
+        40% {
+          filter: brightness(2.1);
+          transform: translate(-50%, -50%) scale(1.14);
+        }
+        100% {
+          filter: brightness(1);
+          transform: translate(-50%, -50%) scale(1);
+        }
+      }
+
+      .hint {
+        position: fixed;
+        left: 50%;
+        bottom: 7vh;
+        transform: translateX(-50%);
+        color: var(--muted);
+        font-size: clamp(0.9rem, 1.4vw, 1.1rem);
+        letter-spacing: 0.03em;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="hud">
+      <div class="wpm" id="wpm">WPM 0</div>
+    </div>
+    <div class="center-guide" aria-hidden="true"></div>
+    <main class="track" id="track"></main>
+    <div class="hint">Type the glowing character as it reaches center.</div>
+
+    <script>
+      const SOURCE_CHARS = "asdfjkl;ghqwertyuiopzxcvbnm";
+      const SEQUENCE_LENGTH = 140;
+      const SPACING = 112;
+      const START_OFFSET = 280;
+      const MIN_SPEED = 45;
+      const MAX_SPEED = 620;
+
+      const track = document.getElementById("track");
+      const wpmEl = document.getElementById("wpm");
+
+      const sequence = Array.from({ length: SEQUENCE_LENGTH }, () =>
+        SOURCE_CHARS[Math.floor(Math.random() * SOURCE_CHARS.length)]
+      );
+
+      const letters = sequence.map((char, index) => {
+        const node = document.createElement("span");
+        node.className = "letter";
+        node.textContent = char;
+        node.dataset.index = String(index);
+        track.appendChild(node);
+        return {
+          char,
+          node,
+          baseX: 0,
+        };
+      });
+
+      let centerX = window.innerWidth / 2;
+      let currentIndex = 0;
+      let scrollX = 0;
+      let speed = 85;
+      let targetSpeed = 85;
+      let avgIntervalMs = 620;
+      let lastTimestamp = performance.now();
+      let typingStartedAt = 0;
+      let typedCount = 0;
+      let lastTypedAt = 0;
+
+      function layoutBasePositions() {
+        centerX = window.innerWidth / 2;
+        const startX = centerX + START_OFFSET;
+        for (const letter of letters) {
+          const i = Number(letter.node.dataset.index);
+          letter.baseX = startX + i * SPACING;
+        }
+        if (currentIndex < letters.length) {
+          scrollX = letters[currentIndex].baseX - centerX;
+        }
+      }
+
+      function updateWPM() {
+        if (!typingStartedAt || typedCount === 0) {
+          wpmEl.textContent = "WPM 0";
+          return;
+        }
+
+        const elapsedMin = (performance.now() - typingStartedAt) / 60000;
+        const words = typedCount / 5;
+        const wpm = elapsedMin > 0 ? Math.round(words / elapsedMin) : 0;
+        wpmEl.textContent = `WPM ${Math.max(0, wpm)}`;
+      }
+
+      function updateActiveClass() {
+        letters.forEach(({ node }, idx) => {
+          node.classList.toggle("active", idx === currentIndex);
+        });
+      }
+
+      function animateTyped(node) {
+        node.classList.add("flash", "typed");
+        setTimeout(() => node.classList.remove("flash"), 380);
+      }
+
+      function onCorrectKey(now) {
+        if (!typingStartedAt) typingStartedAt = now;
+
+        if (lastTypedAt) {
+          const interval = now - lastTypedAt;
+          avgIntervalMs = avgIntervalMs * 0.75 + interval * 0.25;
+        }
+        lastTypedAt = now;
+
+        const typed = letters[currentIndex];
+        scrollX = typed.baseX - centerX;
+        animateTyped(typed.node);
+
+        currentIndex += 1;
+        typedCount += 1;
+
+        const cps = 1000 / Math.max(120, avgIntervalMs);
+        targetSpeed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, cps * SPACING));
+
+        if (currentIndex >= letters.length) {
+          currentIndex = letters.length - 1;
+        }
+
+        updateActiveClass();
+        updateWPM();
+      }
+
+      function keyHandler(event) {
+        if (event.key.length !== 1 || event.metaKey || event.ctrlKey || event.altKey) {
+          return;
+        }
+
+        if (currentIndex >= letters.length) return;
+
+        const expected = letters[currentIndex].char.toLowerCase();
+        if (event.key.toLowerCase() === expected) {
+          onCorrectKey(performance.now());
+        }
+      }
+
+      function render() {
+        for (const letter of letters) {
+          const x = letter.baseX - scrollX;
+          letter.node.style.left = `${x}px`;
+        }
+      }
+
+      function tick(now) {
+        const dt = Math.min(0.05, (now - lastTimestamp) / 1000);
+        lastTimestamp = now;
+
+        speed += (targetSpeed - speed) * 0.06;
+        scrollX += speed * dt;
+
+        render();
+        updateWPM();
+        requestAnimationFrame(tick);
+      }
+
+      window.addEventListener("keydown", keyHandler);
+      window.addEventListener("resize", layoutBasePositions);
+
+      layoutBasePositions();
+      updateActiveClass();
+      render();
+      requestAnimationFrame(tick);
+    </script>
+  </body>
+</html>
